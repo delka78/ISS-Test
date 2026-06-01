@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuizPortal</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- Sfondo decorativo -->
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar" id="topbar" hidden>
+    <div class="brand">
+      <span class="brand-mark">✦</span>
+      <span class="brand-name">QuizPortal</span>
+    </div>
+    <div class="topbar-right">
+      <span class="who" id="who"></span>
+      <button class="btn btn-ghost" id="logout-btn">Esci</button>
+    </div>
+  </header>
+
+  <main class="shell">
+
+    <!-- ============================= AUTH ============================= -->
+    <section id="auth-view" class="view">
+      <div class="auth-card">
+        <div class="auth-mark">✦</div>
+        <h1 class="auth-title">QuizPortal</h1>
+        <p class="auth-sub" id="auth-sub">Accedi per continuare</p>
+
+        <form id="auth-form" class="form" autocomplete="on">
+          <label class="field" id="name-field" hidden>
+            <span>Nome e cognome</span>
+            <input type="text" id="auth-name" placeholder="Mario Rossi" />
+          </label>
+
+          <label class="field">
+            <span>Email</span>
+            <input type="email" id="auth-email" required placeholder="nome@scuola.it" />
+          </label>
+
+          <label class="field">
+            <span>Password</span>
+            <input type="password" id="auth-password" required minlength="6" placeholder="••••••••" />
+          </label>
+
+          <button type="submit" class="btn btn-primary btn-block" id="auth-submit">Accedi</button>
+        </form>
+
+        <p class="auth-toggle">
+          <span id="toggle-label">Prima volta come professore?</span>
+          <button type="button" class="link" id="auth-toggle-btn">Registrati</button>
+        </p>
+
+        <p class="msg" id="auth-msg" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- =========================== STUDENTE =========================== -->
+    <section id="student-view" class="view" hidden>
+
+      <!-- Nessun quiz assegnato -->
+      <div id="student-empty" class="panel center-panel" hidden>
+        <div class="big-emoji">🗒️</div>
+        <h2>Nessun questionario disponibile</h2>
+        <p class="muted">Il tuo professore non ha ancora caricato il tuo questionario. Riprova più tardi.</p>
+      </div>
+
+      <!-- Già inviato -->
+      <div id="student-done" class="panel center-panel" hidden>
+        <div class="check-circle">✓</div>
+        <h2>Risposte inviate</h2>
+        <p class="muted">Le tue risposte sono state registrate correttamente.<br/>Non è possibile modificarle.</p>
+        <p class="done-meta" id="done-meta"></p>
+      </div>
+
+      <!-- Quiz in corso -->
+      <div id="student-quiz" class="panel quiz-panel" hidden>
+        <div class="quiz-head">
+          <div class="quiz-progress-text">
+            Domanda <span id="q-current">1</span> di <span id="q-total">1</span>
+          </div>
+          <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+        </div>
+
+        <h2 class="q-text" id="q-text"></h2>
+        <div class="options" id="q-options"></div>
+
+        <div class="quiz-nav">
+          <button class="btn btn-ghost" id="q-prev">← Indietro</button>
+          <button class="btn btn-primary" id="q-next">Avanti →</button>
+          <button class="btn btn-primary" id="q-submit" hidden>Invia risposte</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================== PROFESSORE ========================== -->
+    <section id="teacher-view" class="view" hidden>
+      <div class="teacher-head">
+        <div>
+          <h1 class="page-title">Pannello professore</h1>
+          <p class="muted" id="teacher-stats"></p>
+        </div>
+        <button class="btn btn-primary" id="export-btn">⬇ Esporta in Excel</button>
+      </div>
+
+      <!-- Aggiungi studente -->
+      <div class="panel">
+        <h2 class="panel-title">Aggiungi studente</h2>
+        <form id="add-student-form" class="row-form">
+          <input type="text"  id="st-name"  placeholder="Nome e cognome" required />
+          <input type="email" id="st-email" placeholder="Email" required />
+          <input type="password" id="st-password" placeholder="Password (min 6)" minlength="6" required />
+          <button type="submit" class="btn btn-primary" id="add-student-btn">Aggiungi</button>
+        </form>
+        <p class="msg" id="teacher-msg" role="alert"></p>
+      </div>
+
+      <!-- Elenco studenti -->
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2 class="panel-title">Studenti</h2>
+          <button class="btn btn-ghost btn-sm" id="refresh-btn">↻ Aggiorna</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Studente</th>
+                <th>Email</th>
+                <th>Questionario</th>
+                <th>Risposta</th>
+                <th class="ta-right">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="students-body">
+              <tr><td colspan="5" class="muted center">Caricamento…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modale anteprima questionario -->
+  <div class="modal-backdrop" id="preview-modal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="preview-title">Anteprima questionario</h3>
+        <button class="btn btn-ghost btn-sm" id="preview-close">Chiudi ✕</button>
+      </div>
+      <div class="modal-body" id="preview-body"></div>
+    </div>
+  </div>
+
+  <!-- input file nascosto, riutilizzato per ogni studente -->
+  <input type="file" id="docx-input" accept=".docx" hidden />
+
+  <!-- toast -->
+  <div class="toast" id="toast" hidden></div>
+
+  <!-- Librerie CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- App -->
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
