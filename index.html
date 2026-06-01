@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QuizPortal</title>
 
+  <!-- favicon inline (evita l'errore 404 favicon.ico) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23c2683a'/%3E%3Ctext x='16' y='23' font-size='19' text-anchor='middle' fill='white'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -73,6 +76,15 @@
         <p class="muted">Il tuo professore non ha ancora caricato il tuo questionario. Riprova più tardi.</p>
       </div>
 
+      <!-- Schermata introduttiva (prima della domanda 1) -->
+      <div id="student-intro" class="panel center-panel" hidden>
+        <div class="big-emoji">📝</div>
+        <h2 id="intro-title">Questionario</h2>
+        <div id="intro-text" class="intro-text"></div>
+        <p id="intro-time" class="intro-time muted"></p>
+        <button class="btn btn-primary" id="intro-start">Inizia il questionario</button>
+      </div>
+
       <!-- Già inviato -->
       <div id="student-done" class="panel center-panel" hidden>
         <div class="check-circle">✓</div>
@@ -81,23 +93,38 @@
         <p class="done-meta" id="done-meta"></p>
       </div>
 
-      <!-- Quiz in corso -->
-      <div id="student-quiz" class="panel quiz-panel" hidden>
-        <div class="quiz-head">
-          <div class="quiz-progress-text">
-            Domanda <span id="q-current">1</span> di <span id="q-total">1</span>
+      <!-- Quiz in corso: due colonne (domanda + riepilogo) -->
+      <div id="student-quiz" class="quiz-layout" hidden>
+        <div class="panel quiz-main">
+          <div class="quiz-head">
+            <div class="quiz-head-row">
+              <div class="quiz-progress-text">
+                Domanda <span id="q-current">1</span> di <span id="q-total">1</span>
+              </div>
+              <div class="timer" id="timer" hidden>⏱ <span id="timer-val">--:--</span></div>
+            </div>
+            <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
           </div>
-          <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+
+          <h2 class="q-text" id="q-text"></h2>
+          <div class="options" id="q-options"></div>
+
+          <div class="quiz-nav">
+            <button class="btn btn-ghost" id="q-prev">← Indietro</button>
+            <button class="btn btn-ghost" id="q-clear">Cancella risposta</button>
+            <button class="btn btn-ghost" id="q-next">Avanti →</button>
+            <button class="btn btn-primary" id="q-submit">Termina e invia</button>
+          </div>
         </div>
 
-        <h2 class="q-text" id="q-text"></h2>
-        <div class="options" id="q-options"></div>
-
-        <div class="quiz-nav">
-          <button class="btn btn-ghost" id="q-prev">← Indietro</button>
-          <button class="btn btn-primary" id="q-next">Avanti →</button>
-          <button class="btn btn-primary" id="q-submit" hidden>Invia risposte</button>
-        </div>
+        <aside class="panel quiz-aside">
+          <h3 class="aside-title">Riepilogo</h3>
+          <div class="nav-grid" id="nav-grid"></div>
+          <div class="aside-legend">
+            <span><i class="dot dot-done"></i> Risposta data</span>
+            <span><i class="dot dot-empty"></i> Vuota</span>
+          </div>
+        </aside>
       </div>
     </section>
 
@@ -136,15 +163,17 @@
                 <th>Studente</th>
                 <th>Email</th>
                 <th>Questionario</th>
+                <th>Tempo (min)</th>
                 <th>Risposta</th>
                 <th class="ta-right">Azioni</th>
               </tr>
             </thead>
             <tbody id="students-body">
-              <tr><td colspan="5" class="muted center">Caricamento…</td></tr>
+              <tr><td colspan="6" class="muted center">Caricamento…</td></tr>
             </tbody>
           </table>
         </div>
+        <p class="muted table-note">Tempo: minuti a disposizione dello studente. <b>0 = nessun limite.</b></p>
       </div>
     </section>
   </main>
