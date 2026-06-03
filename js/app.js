@@ -67,7 +67,8 @@ function showView(name) {
     $(v).hidden = v !== name + "-view";
   });
   $("topbar").hidden = name === "auth";
-  $("acme-badge").hidden = name !== "student";   // logo ACM-e solo nelle pagine del test
+  const badge = $("acme-badge");
+  if (badge) badge.hidden = false;   // logo ACM-e sempre visibile
 }
 
 /* ============================================================================
@@ -495,10 +496,11 @@ async function saveTimeLimit(studentId, minutes) {
 /* --------------------------- Elimina studente --------------------------- */
 
 async function deleteStudent(studentId, name) {
-  if (!confirm(`Eliminare lo studente "${name}"?\n\nVerranno cancellati anche il suo questionario e le sue risposte. L'operazione non è reversibile.`))
+  if (!confirm(`Eliminare definitivamente lo studente "${name}"?\n\nVerranno cancellati l'account di accesso, il profilo, il questionario e le risposte. L'operazione non è reversibile.`))
     return;
 
-  const { error } = await db.from("profiles").delete().eq("id", studentId);
+  // funzione nel database (security definer): elimina anche l'utente di login
+  const { error } = await db.rpc("delete_student", { target: studentId });
   if (error) { toast("Errore nell'eliminazione: " + error.message, true); return; }
 
   toast("Studente eliminato: " + name);
