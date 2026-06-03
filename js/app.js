@@ -1,772 +1,377 @@
 /* ============================================================================
-   QuizPortal — app.js
-   Auth, routing, vista studente (intro + timer + riepilogo laterale),
-   vista professore (studenti + tempo + upload .docx + anteprima + export Excel).
+   QuizPortal — style.css
+   Aesthetic: editorial / "carta d'esame" — avorio caldo, inchiostro, ocra.
    ========================================================================== */
 
-"use strict";
-
-/* --------------------------- Supabase client ----------------------------- */
-const { createClient } = window.supabase;
-const db = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
-
-/* ------------------------------- Stato ----------------------------------- */
-const S = {
-  user: null,
-  profile: null,
-  authMode: "login",
-  // studente
-  quiz: null,
-  idx: 0,
-  answers: {},
-  deadline: null,        // timestamp ms in cui scade il tempo (null = nessun limite)
-  timerInterval: null,
-  // professore
-  students: [],
-  quizzesByStudent: {},
-  responsesByStudent: {},
-  uploadTarget: null,
-};
-
-const POINTS = { correct: 3, wrong: -1, blank: 0 };
-
-/* ------------------------------ Helper ----------------------------------- */
-const $ = (id) => document.getElementById(id);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
+:root {
+  /* Palette ACM-e (logo: #3f6aa1 blu, #4cbcee azzurro) */
+  --paper:      #eef3f9;
+  --paper-2:    #ffffff;
+  --ink:        #1b2733;
+  --ink-soft:   #45525f;
+  --muted:      #74828f;
+  --line:       #e1e9f2;
+  --line-2:     #cad7e6;
+  --ochre:      #3f6aa1;   /* accent principale ACM-e */
+  --ochre-dk:   #335887;
+  --brand-lt:   #4cbcee;   /* azzurro chiaro ACM-e */
+  --olive:      #3f6aa1;
+  --green:      #2f8f5b;
+  --red:        #c0392b;
+  --shadow:     0 1px 2px rgba(32,33,29,.05), 0 14px 40px -22px rgba(32,33,29,.35);
+  --radius:     14px;
+  --radius-sm:  9px;
 }
 
-let toastTimer = null;
-function toast(message, isError = false) {
-  const t = $("toast");
-  t.textContent = message;
-  t.className = "toast" + (isError ? " err" : "");
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 3400);
+* { box-sizing: border-box; }
+
+/* Garantisce che gli elementi con attributo "hidden" restino davvero nascosti,
+   anche quando hanno display:flex / display:grid (topbar, modale, campo nome). */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Hanken Grotesk", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
-function setLoading(id, on, restoreText) {
-  const b = $(id);
-  if (on) {
-    b.dataset.txt = b.textContent;
-    b.disabled = true;
-    b.innerHTML = '<span class="spin"></span>';
-  } else {
-    b.disabled = false;
-    b.textContent = restoreText || b.dataset.txt || b.textContent;
-  }
+/* atmosfera: leggera trama + alone caldo */
+body {
+  background-image:
+    radial-gradient(1100px 700px at 85% -10%, #dceaf8 0%, transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, #e3edf8 0%, transparent 55%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+.grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: .5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
 }
 
-function showView(name) {
-  ["auth-view", "student-view", "teacher-view"].forEach((v) => {
-    $(v).hidden = v !== name + "-view";
-  });
-  $("topbar").hidden = name === "auth";
-  $("acme-badge").hidden = name !== "student";   // logo ACM-e solo nelle pagine del test
+h1, h2, h3 { font-family: "Fraunces", Georgia, serif; font-weight: 600; letter-spacing: -.01em; }
+.muted { color: var(--muted); }
+.center { text-align: center; }
+.ta-right { text-align: right; }
+
+/* ----------------------------- Topbar ----------------------------------- */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px clamp(16px, 5vw, 56px);
+  background: rgba(247,241,230,.82);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark { color: var(--ochre); font-size: 18px; }
+.brand-name { font-family: "Fraunces", serif; font-weight: 600; font-size: 20px; letter-spacing: -.02em; }
+.topbar-right { display: flex; align-items: center; gap: 14px; }
+.who { font-size: 14px; color: var(--ink-soft); }
+
+/* ------------------------------ Shell ----------------------------------- */
+.shell {
+  position: relative; z-index: 1;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: clamp(20px, 5vw, 48px) clamp(16px, 5vw, 40px) 80px;
+}
+.view { animation: rise .5s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px);} to { opacity: 1; transform: none;} }
+
+/* ------------------------------ Buttons --------------------------------- */
+.btn {
+  font-family: inherit; font-size: 15px; font-weight: 600;
+  border: 1px solid transparent; border-radius: 999px;
+  padding: 10px 18px; cursor: pointer;
+  transition: transform .12s ease, background .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--ochre); color: #fff; box-shadow: 0 8px 18px -10px var(--ochre); }
+.btn-primary:hover { background: var(--ochre-dk); }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--line-2); }
+.btn-ghost:hover { background: #1b27330a; border-color: var(--ink-soft); }
+.btn-block { width: 100%; padding: 13px; }
+.btn-sm { padding: 7px 13px; font-size: 13.5px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.link {
+  background: none; border: none; color: var(--ochre-dk); font: inherit;
+  font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; padding: 0;
+}
+
+/* ------------------------------- Auth ----------------------------------- */
+#auth-view { display: grid; place-items: center; min-height: 72vh; }
+.auth-card {
+  width: 100%; max-width: 410px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 38px 34px 30px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.auth-mark {
+  width: 52px; height: 52px; margin: 0 auto 14px; border-radius: 14px;
+  display: grid; place-items: center; font-size: 22px;
+  color: #fff; background: linear-gradient(150deg, var(--brand-lt), var(--ochre-dk));
+  box-shadow: 0 10px 22px -10px var(--ochre);
+}
+.auth-title { margin: 0; font-size: 32px; }
+.auth-sub { margin: 4px 0 26px; color: var(--muted); }
+.form { display: grid; gap: 15px; text-align: left; }
+.field { display: grid; gap: 6px; }
+.field span { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+input[type=text], input[type=email], input[type=password] {
+  font: inherit; color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  padding: 11px 13px; width: 100%;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+input:focus { outline: none; border-color: var(--ochre); box-shadow: 0 0 0 3px rgba(194,104,58,.15); }
+input::placeholder { color: #9aa7b5; }
+.auth-toggle { margin-top: 20px; font-size: 14px; color: var(--muted); }
+.msg { min-height: 20px; font-size: 14px; margin: 12px 0 0; }
+.msg.error { color: var(--red); }
+.msg.ok { color: var(--green); }
+
+/* ------------------------------ Panels ---------------------------------- */
+.panel {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px 26px;
+  box-shadow: var(--shadow);
+  margin-bottom: 22px;
+}
+.panel-title { margin: 0 0 16px; font-size: 21px; }
+.panel-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-title-row .panel-title { margin: 0; }
+.center-panel { text-align: center; padding: 56px 30px; }
+.big-emoji { font-size: 48px; margin-bottom: 8px; }
+
+/* ----------------------------- Teacher ---------------------------------- */
+.teacher-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 24px; flex-wrap: wrap;
+}
+.page-title { margin: 0; font-size: 34px; }
+.row-form { display: flex; gap: 10px; flex-wrap: wrap; }
+.row-form input { flex: 1 1 160px; }
+.row-form .btn { flex: 0 0 auto; }
+
+.table-wrap { overflow-x: auto; margin: 0 -6px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 14.5px; min-width: 620px; }
+.data-table th {
+  text-align: left; font-weight: 600; color: var(--muted);
+  font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  padding: 0 12px 10px; border-bottom: 1px solid var(--line-2);
+}
+.data-table td { padding: 13px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.data-table tr:last-child td { border-bottom: none; }
+.st-name { font-weight: 600; }
+.cell-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.pill-ok    { background: #dff0e6; color: var(--green); }
+.pill-wait  { background: #eef2f7; color: var(--muted); }
+.pill-quiz  { background: #e1ecf7; color: var(--ochre-dk); }
+
+/* ------------------------------- Quiz ----------------------------------- */
+.quiz-panel { max-width: 700px; margin: 6px auto 0; padding: 32px 34px 30px; }
+.quiz-head { margin-bottom: 26px; }
+.quiz-progress-text { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 9px; letter-spacing: .02em; }
+.progress { height: 8px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--brand-lt), var(--ochre)); border-radius: 999px; transition: width .4s cubic-bezier(.2,.7,.2,1); }
+
+.q-text { font-size: 25px; line-height: 1.3; margin: 0 0 22px; }
+.options { display: grid; gap: 11px; margin-bottom: 28px; }
+.option {
+  display: flex; align-items: center; gap: 14px;
+  text-align: left; width: 100%;
+  background: var(--paper); border: 1.5px solid var(--line-2);
+  border-radius: var(--radius-sm); padding: 15px 16px;
+  font: inherit; color: var(--ink); cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, transform .12s ease;
+}
+.option:hover { border-color: var(--ink-soft); transform: translateX(2px); }
+.option .key {
+  flex: 0 0 30px; height: 30px; border-radius: 8px;
+  display: grid; place-items: center; font-weight: 700; font-size: 14px;
+  background: #dde8f4; color: var(--ink-soft); text-transform: uppercase;
+  transition: background .15s ease, color .15s ease;
+}
+.option.selected { border-color: var(--ochre); background: #e4eef9; }
+.option.selected .key { background: var(--ochre); color: #fff; }
+
+.quiz-nav { display: flex; gap: 12px; align-items: center; }
+.quiz-nav .btn-ghost { margin-right: auto; }
+
+.check-circle {
+  width: 76px; height: 76px; margin: 0 auto 18px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 38px; color: #fff;
+  background: linear-gradient(150deg, var(--green), #2f6340);
+  box-shadow: 0 14px 30px -14px var(--green);
+}
+.done-meta { margin-top: 14px; font-size: 13.5px; color: var(--muted); }
+
+/* ------------------------------ Modal ----------------------------------- */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(32,33,29,.45); backdrop-filter: blur(3px);
+  display: grid; place-items: center; padding: 20px;
+  animation: fade .2s ease both;
+}
+@keyframes fade { from { opacity: 0;} to { opacity: 1;} }
+.modal {
+  width: 100%; max-width: 620px; max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--paper-2); border: 1px solid var(--line-2);
+  border-radius: var(--radius); box-shadow: 0 30px 70px -30px rgba(0,0,0,.5);
+  overflow: hidden;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.modal-head h3 { margin: 0; font-size: 19px; }
+.modal-body { padding: 8px 22px 22px; overflow-y: auto; }
+
+.preview-q { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.preview-q:last-child { border-bottom: none; }
+.preview-q-text { font-weight: 600; margin-bottom: 8px; }
+.preview-opt { padding: 4px 0 4px 20px; color: var(--ink-soft); font-size: 14.5px; }
+.preview-opt.correct { color: var(--green); font-weight: 600; }
+.preview-opt.correct::before { content: "✓ "; }
+
+/* ------------------------------ Toast ----------------------------------- */
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  z-index: 60; background: var(--ink); color: var(--paper-2);
+  padding: 12px 20px; border-radius: 999px; font-size: 14px; font-weight: 500;
+  box-shadow: 0 16px 34px -16px rgba(0,0,0,.6);
+  animation: toastIn .25s ease both;
+}
+.toast.err { background: var(--red); }
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, 12px);} to { opacity: 1; transform: translate(-50%,0);} }
+
+/* spinner inline */
+.spin { display: inline-block; width: 15px; height: 15px; border: 2px solid #ffffff70; border-top-color: #fff; border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -2px; }
+@keyframes sp { to { transform: rotate(360deg);} }
+
+/* --------------------------- Responsive --------------------------------- */
+@media (max-width: 640px) {
+  .auth-card { padding: 30px 22px; }
+  .quiz-panel { padding: 24px 20px; }
+  .q-text { font-size: 21px; }
+  .teacher-head { align-items: stretch; }
+  .teacher-head .btn { width: 100%; }
+  .row-form { flex-direction: column; }
+  .row-form input, .row-form .btn { width: 100%; flex: none; }
+  .quiz-nav { flex-wrap: wrap; }
+  .quiz-nav .btn { flex: 1 1 auto; }
+  .quiz-nav .btn-ghost { margin-right: 0; }
 }
 
 /* ============================================================================
-   AUTENTICAZIONE
+   Aggiunte: introduzione, timer, layout a due colonne, riepilogo laterale
    ========================================================================== */
 
-function setAuthMode(mode) {
-  S.authMode = mode;
-  const register = mode === "register";
-  $("name-field").hidden = !register;
-  $("auth-sub").textContent = register ? "Crea l'account professore" : "Accedi per continuare";
-  $("auth-submit").textContent = register ? "Registrati" : "Accedi";
-  $("toggle-label").textContent = register ? "Hai già un account?" : "Prima volta come professore?";
-  $("auth-toggle-btn").textContent = register ? "Accedi" : "Registrati";
-  $("auth-msg").textContent = "";
+/* --- Schermata introduttiva --- */
+.intro-text {
+  max-width: 560px; margin: 6px auto 4px; text-align: left;
+  white-space: pre-wrap; color: var(--ink-soft); line-height: 1.6;
 }
+.intro-text:empty { display: none; }
+.intro-time { margin: 14px 0 22px; font-weight: 600; }
 
-async function handleAuthSubmit(e) {
-  e.preventDefault();
-  const email = $("auth-email").value.trim();
-  const password = $("auth-password").value;
-  const name = $("auth-name").value.trim();
-  const msg = $("auth-msg");
-  msg.className = "msg";
-  msg.textContent = "";
-  setLoading("auth-submit", true);
-
-  try {
-    if (S.authMode === "register") {
-      const role = email.toLowerCase() === CONFIG.TEACHER_EMAIL.toLowerCase() ? "teacher" : "student";
-      const { data, error } = await db.auth.signUp({
-        email, password,
-        options: { data: { full_name: name, role } },
-      });
-      if (error) throw error;
-      if (data.session) return; // già loggato -> il listener fa il routing
-      setLoading("auth-submit", false, "Registrati");
-      msg.className = "msg ok";
-      msg.textContent = "Account creato. Ora puoi accedere.";
-      setAuthMode("login");
-      $("auth-email").value = email;
-    } else {
-      const { error } = await db.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-    }
-  } catch (err) {
-    setLoading("auth-submit", false, S.authMode === "register" ? "Registrati" : "Accedi");
-    msg.className = "msg error";
-    msg.textContent = traduciErroreAuth(err);
-  }
+/* --- Layout a due colonne (domanda + riepilogo) --- */
+.quiz-layout {
+  display: grid;
+  grid-template-columns: 1fr 248px;
+  gap: 20px;
+  align-items: start;
+  max-width: 940px;
+  margin: 6px auto 0;
+  animation: rise .5s cubic-bezier(.2,.7,.2,1) both;
 }
+.quiz-main { padding: 30px 32px 26px; }
 
-function traduciErroreAuth(err) {
-  const m = (err?.message || "").toLowerCase();
-  if (m.includes("invalid login")) return "Email o password non corretti.";
-  if (m.includes("already registered") || m.includes("already been registered"))
-    return "Questa email è già registrata.";
-  if (m.includes("email not confirmed")) return "Email non confermata. Contatta il professore.";
-  if (m.includes("password")) return "Password troppo corta (minimo 6 caratteri).";
-  return err?.message || "Si è verificato un errore.";
-}
-
-async function handleLogout() {
-  stopTimer();
-  await db.auth.signOut();
-  Object.assign(S, { user: null, profile: null, quiz: null, idx: 0, answers: {}, deadline: null });
-  showView("auth");
-  setAuthMode("login");
-}
-
-/* ============================================================================
-   ROUTING
-   ========================================================================== */
-
-async function route() {
-  const { data: { user } } = await db.auth.getUser();
-  if (!user) { showView("auth"); return; }
-  S.user = user;
-
-  let profile = await fetchProfile(user.id);
-  if (!profile) { await sleep(700); profile = await fetchProfile(user.id); }
-  S.profile = profile;
-
-  const roleLabel = profile?.role === "teacher" ? "Professore" : "Studente";
-  $("who").textContent = `${profile?.full_name || profile?.email || ""} · ${roleLabel}`;
-
-  if (profile?.role === "teacher") { showView("teacher"); loadTeacher(); }
-  else { showView("student"); loadStudent(); }
-}
-
-async function fetchProfile(id) {
-  const { data } = await db.from("profiles").select("*").eq("id", id).maybeSingle();
-  return data;
-}
-
-/* ============================================================================
-   VISTA STUDENTE
-   ========================================================================== */
-
-function hideAllStudentPanels() {
-  ["student-quiz", "student-empty", "student-done", "student-intro"].forEach((id) => ($(id).hidden = true));
-}
-
-async function loadStudent() {
-  hideAllStudentPanels();
-  stopTimer();
-
-  // ha già risposto?
-  const { data: existing } = await db
-    .from("responses").select("submitted_at").eq("student_id", S.user.id).maybeSingle();
-  if (existing) { showStudentDone(existing.submitted_at); return; }
-
-  // questionario SENZA risposte corrette (RPC security definer)
-  const { data, error } = await db.rpc("get_my_quiz");
-  if (error) { toast("Errore nel caricamento del questionario.", true); return; }
-
-  const quiz = Array.isArray(data) ? data[0] : data;
-  if (!quiz || !quiz.questions || quiz.questions.length === 0) {
-    $("student-empty").hidden = false;
-    return;
-  }
-
-  S.quiz = quiz;
-  S.idx = 0;
-  S.answers = {};
-  S.deadline = null;
-
-  // ripresa dopo un ricaricamento accidentale (stato salvato nella scheda)
-  const saved = loadQuizState(quiz.id);
-  if (saved) {
-    S.answers = saved.answers || {};
-    S.idx = Math.min(saved.idx || 0, quiz.questions.length - 1);
-    S.deadline = saved.deadline || null;
-    if (S.deadline && Date.now() >= S.deadline) { enterQuiz(); submitQuiz(true); return; }
-    enterQuiz();
-    return;
-  }
-
-  showIntro();
-}
-
-function showIntro() {
-  hideAllStudentPanels();
-  $("intro-title").textContent = S.quiz.title || "Questionario";
-  $("intro-text").textContent = S.quiz.intro || "";
-  const tl = S.quiz.time_limit_minutes || 0;   // durata impostata dal professore
-  $("intro-time").textContent = tl > 0 ? `Durata: ${tl} minuti` : "Nessun limite di tempo";
-  $("student-intro").hidden = false;
-}
-
-function startQuiz() {
-  const tl = S.quiz.time_limit_minutes || 0;
-  S.deadline = tl > 0 ? Date.now() + tl * 60 * 1000 : null;
-  enterQuiz();
-}
-
-function enterQuiz() {
-  hideAllStudentPanels();
-  $("student-quiz").hidden = false;
-  $("q-total").textContent = S.quiz.questions.length;
-  renderQuestion();
-  renderNavigator();
-  persistQuizState();
-  if (S.deadline) startTimer();
-  else $("timer").hidden = true;
-}
-
-function renderQuestion() {
-  const qs = S.quiz.questions;
-  const q = qs[S.idx];
-
-  $("q-current").textContent = S.idx + 1;
-  $("progress-bar").style.width = ((S.idx + 1) / qs.length) * 100 + "%";
-  $("q-text").textContent = q.text;
-
-  const box = $("q-options");
-  box.innerHTML = "";
-  (q.options || []).forEach((opt) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "option" + (S.answers[q.number] === opt.key ? " selected" : "");
-    b.innerHTML = `<span class="key">${escapeHtml(opt.key)}</span><span>${escapeHtml(opt.text)}</span>`;
-    b.addEventListener("click", () => {
-      S.answers[q.number] = opt.key;
-      persistQuizState();
-      renderQuestion();
-      renderNavigator();
-    });
-    box.appendChild(b);
-  });
-
-  $("q-prev").disabled = S.idx === 0;
-  $("q-next").disabled = S.idx === qs.length - 1;
-  $("q-clear").disabled = !S.answers[q.number];
-}
-
-function renderNavigator() {
-  const grid = $("nav-grid");
-  grid.innerHTML = "";
-  S.quiz.questions.forEach((q, i) => {
-    const given = S.answers[q.number];
-    const cell = document.createElement("button");
-    cell.type = "button";
-    cell.className = "nav-cell" + (given ? " answered" : "") + (i === S.idx ? " current" : "");
-    cell.innerHTML = `<span class="num">${q.number}</span><span class="ans">${given ? escapeHtml(given) : "—"}</span>`;
-    cell.addEventListener("click", () => goToQuestion(i));
-    grid.appendChild(cell);
-  });
-}
-
-function goToQuestion(i) {
-  S.idx = i;
-  persistQuizState();
-  renderQuestion();
-  renderNavigator();
-}
-
-function clearAnswer() {
-  const q = S.quiz.questions[S.idx];
-  delete S.answers[q.number];
-  persistQuizState();
-  renderQuestion();
-  renderNavigator();
-}
+.quiz-head { margin-bottom: 24px; }
+.quiz-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.quiz-progress-text { font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
 
 /* --- Timer --- */
-function startTimer() {
-  $("timer").hidden = false;
-  tickTimer();
-  clearInterval(S.timerInterval);
-  S.timerInterval = setInterval(tickTimer, 1000);
+.timer {
+  font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums;
+  background: #dde8f4; color: var(--ink-soft);
+  padding: 5px 12px; border-radius: 999px; white-space: nowrap;
+  transition: background .2s ease, color .2s ease;
 }
-function stopTimer() {
-  clearInterval(S.timerInterval);
-  S.timerInterval = null;
-}
-function tickTimer() {
-  if (!S.deadline) return;
-  const remaining = Math.max(0, S.deadline - Date.now());
-  const totSec = Math.floor(remaining / 1000);
-  const mm = String(Math.floor(totSec / 60)).padStart(2, "0");
-  const ss = String(totSec % 60).padStart(2, "0");
-  $("timer-val").textContent = `${mm}:${ss}`;
-  $("timer").classList.toggle("danger", totSec <= 60);
-  if (remaining <= 0) {
-    stopTimer();
-    toast("Tempo scaduto: invio automatico delle risposte.", true);
-    submitQuiz(true);
-  }
-}
+.timer.danger { background: #fbe2de; color: var(--red); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
 
-/* --- Invio --- */
-async function submitQuiz(auto = false) {
-  const qs = S.quiz.questions;
-  const blanks = qs.filter((q) => !S.answers[q.number]).length;
-
-  if (!auto) {
-    let msg = "Inviare le risposte? Dopo l'invio non potrai più modificarle.";
-    if (blanks > 0) msg = `Hai ${blanks} domande senza risposta (varranno 0 punti). ` + msg;
-    if (!confirm(msg)) return;
-  }
-
-  stopTimer();
-  setLoading("q-submit", true);
-  const { error } = await db.from("responses").insert({
-    quiz_id: S.quiz.id,
-    student_id: S.user.id,
-    answers: S.answers,
-  });
-  setLoading("q-submit", false, "Termina e invia");
-
-  if (error) {
-    if (error.code === "23505" || /duplicate|unique/i.test(error.message || "")) {
-      clearQuizState(S.quiz.id);
-      showStudentDone(new Date().toISOString());
-    } else {
-      toast("Errore nell'invio: " + error.message, true);
-    }
-    return;
-  }
-  clearQuizState(S.quiz.id);
-  showStudentDone(new Date().toISOString());
+/* --- Riepilogo laterale --- */
+.quiz-aside { padding: 20px 18px; position: sticky; top: 78px; }
+.aside-title { margin: 0 0 14px; font-size: 17px; }
+.nav-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; max-height: 56vh; overflow-y: auto; padding-right: 2px; }
+.nav-cell {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 7px 2px 5px; border-radius: 9px; cursor: pointer;
+  border: 1.5px solid var(--line-2); background: var(--paper);
+  font-family: inherit; color: var(--ink); transition: all .12s ease;
 }
+.nav-cell:hover { border-color: var(--ink-soft); }
+.nav-cell .num { font-size: 13px; font-weight: 700; line-height: 1; }
+.nav-cell .ans { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; line-height: 1; }
+.nav-cell.answered { background: #e4eef9; border-color: var(--ochre); }
+.nav-cell.answered .ans { color: var(--ochre-dk); }
+.nav-cell.current { box-shadow: 0 0 0 2px var(--ink); border-color: var(--ink); }
 
-function showStudentDone(dateIso) {
-  hideAllStudentPanels();
-  $("student-done").hidden = false;
-  $("done-meta").textContent = "Inviato il " + new Date(dateIso).toLocaleString("it-IT");
-}
+.aside-legend { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; font-size: 12.5px; color: var(--muted); }
+.aside-legend span { display: flex; align-items: center; gap: 7px; }
+.dot { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+.dot-done { background: #e4eef9; border: 1.5px solid var(--ochre); }
+.dot-empty { background: var(--paper); border: 1.5px solid var(--line-2); }
 
-/* --- Persistenza nella scheda (sopravvive a un refresh accidentale) --- */
-function stateKey(qid) { return "qp_state_" + qid; }
-function persistQuizState() {
-  try {
-    sessionStorage.setItem(stateKey(S.quiz.id), JSON.stringify({
-      answers: S.answers, idx: S.idx, deadline: S.deadline,
-    }));
-  } catch (_) {}
+/* --- Campo tempo nella tabella professore --- */
+.time-input {
+  width: 72px; padding: 7px 9px; text-align: center;
+  font: inherit; border: 1px solid var(--line-2); border-radius: 8px; background: var(--paper);
 }
-function loadQuizState(qid) {
-  try {
-    const raw = sessionStorage.getItem(stateKey(qid));
-    return raw ? JSON.parse(raw) : null;
-  } catch (_) { return null; }
+.time-input:disabled { opacity: .45; cursor: not-allowed; }
+.table-note { font-size: 12.5px; margin: 14px 2px 0; }
+
+/* --- Responsive: impila le due colonne --- */
+@media (max-width: 760px) {
+  .quiz-layout { grid-template-columns: 1fr; }
+  .quiz-aside { position: static; order: 2; }
+  .nav-grid { grid-template-columns: repeat(6, 1fr); }
 }
-function clearQuizState(qid) {
-  try { sessionStorage.removeItem(stateKey(qid)); } catch (_) {}
+@media (max-width: 480px) {
+  .nav-grid { grid-template-columns: repeat(5, 1fr); }
 }
 
 /* ============================================================================
-   VISTA PROFESSORE
+   Logo ACM-e in basso a destra (pagine del test)
    ========================================================================== */
-
-async function loadTeacher() {
-  const body = $("students-body");
-  body.innerHTML = `<tr><td colspan="6" class="muted center">Caricamento…</td></tr>`;
-
-  const [profRes, quizRes, respRes] = await Promise.all([
-    db.from("profiles").select("*").eq("role", "student").order("created_at", { ascending: true }),
-    db.from("quizzes").select("*"),
-    db.from("responses").select("*"),
-  ]);
-
-  if (profRes.error) {
-    body.innerHTML = `<tr><td colspan="6" class="muted center">Errore: ${escapeHtml(profRes.error.message)}</td></tr>`;
-    return;
-  }
-
-  S.students = profRes.data || [];
-  S.quizzesByStudent = {};
-  (quizRes.data || []).forEach((q) => (S.quizzesByStudent[q.student_id] = q));
-  S.responsesByStudent = {};
-  (respRes.data || []).forEach((r) => (S.responsesByStudent[r.student_id] = r));
-
-  renderStudents();
+.acme-badge {
+  position: fixed; right: 18px; bottom: 16px; z-index: 30;
+  background: rgba(255,255,255,.9); backdrop-filter: blur(6px);
+  border: 1px solid var(--line-2); border-radius: 12px;
+  padding: 9px 14px; box-shadow: var(--shadow);
+  display: flex; align-items: center; gap: 8px;
+  pointer-events: none;
+}
+.acme-badge .acme-label { font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+.acme-badge svg { display: block; height: 22px; width: auto; }
+@media (max-width: 600px) {
+  .acme-badge { right: 10px; bottom: 10px; padding: 7px 10px; }
+  .acme-badge svg { height: 18px; }
+  .acme-badge .acme-label { display: none; }
 }
 
-function renderStudents() {
-  const body = $("students-body");
-  const nQuiz = Object.keys(S.quizzesByStudent).length;
-  const nResp = Object.keys(S.responsesByStudent).length;
-  $("teacher-stats").textContent =
-    `${S.students.length} studenti · ${nQuiz} questionari · ${nResp} risposte ricevute`;
-
-  if (S.students.length === 0) {
-    body.innerHTML = `<tr><td colspan="6" class="muted center">Nessuno studente. Aggiungine uno qui sopra.</td></tr>`;
-    return;
-  }
-
-  body.innerHTML = S.students.map((s) => {
-    const quiz = S.quizzesByStudent[s.id];
-    const resp = S.responsesByStudent[s.id];
-    const quizPill = quiz
-      ? `<span class="pill pill-quiz">${quiz.questions.length} domande</span>`
-      : `<span class="pill pill-wait">—</span>`;
-    const respPill = resp
-      ? `<span class="pill pill-ok">Inviata</span>`
-      : `<span class="pill pill-wait">In attesa</span>`;
-    const timeInput = `<input type="number" min="0" class="time-input" data-act="time" data-id="${s.id}"
-        value="${quiz ? (quiz.time_limit_minutes || 0) : 0}" ${quiz ? "" : "disabled"} />`;
-    return `
-      <tr>
-        <td class="st-name">${escapeHtml(s.full_name || "—")}</td>
-        <td>${escapeHtml(s.email)}</td>
-        <td>${quizPill}</td>
-        <td>${timeInput}</td>
-        <td>${respPill}</td>
-        <td>
-          <div class="cell-actions">
-            <button class="btn btn-ghost btn-sm" data-act="upload" data-id="${s.id}">
-              ${quiz ? "Sostituisci .docx" : "Carica .docx"}
-            </button>
-            <button class="btn btn-ghost btn-sm" data-act="preview" data-id="${s.id}" ${quiz ? "" : "disabled"}>
-              Anteprima
-            </button>
-            <button class="btn btn-danger btn-sm" data-act="delete" data-id="${s.id}" data-name="${escapeHtml(s.full_name || s.email)}">
-              Elimina
-            </button>
-          </div>
-        </td>
-      </tr>`;
-  }).join("");
-}
-
-/* ----------------------- Aggiungi studente ------------------------------- */
-
-async function handleAddStudent(e) {
-  e.preventDefault();
-  const name = $("st-name").value.trim();
-  const email = $("st-email").value.trim();
-  const password = $("st-password").value;
-  const msg = $("teacher-msg");
-  msg.className = "msg"; msg.textContent = "";
-
-  if (password.length < 6) { msg.className = "msg error"; msg.textContent = "Password minimo 6 caratteri."; return; }
-  setLoading("add-student-btn", true);
-
-  // client temporaneo: non sostituisce la sessione del professore
-  const tempClient = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false, storageKey: "sb-temp-signup" },
-  });
-  const { error } = await tempClient.auth.signUp({
-    email, password, options: { data: { full_name: name, role: "student" } },
-  });
-  setLoading("add-student-btn", false, "Aggiungi");
-
-  if (error) { msg.className = "msg error"; msg.textContent = traduciErroreAuth(error); return; }
-
-  $("add-student-form").reset();
-  toast("Studente aggiunto: " + name);
-  await sleep(500);
-  loadTeacher();
-}
-
-/* --------------------- Tempo massimo per test ---------------------------- */
-
-async function saveTimeLimit(studentId, minutes) {
-  const val = Math.max(0, parseInt(minutes, 10) || 0);
-  const { error } = await db.from("quizzes").update({ time_limit_minutes: val }).eq("student_id", studentId);
-  if (error) { toast("Errore nel salvataggio del tempo.", true); return; }
-  if (S.quizzesByStudent[studentId]) S.quizzesByStudent[studentId].time_limit_minutes = val;
-  toast(val > 0 ? `Tempo impostato: ${val} min.` : "Nessun limite di tempo.");
-}
-
-/* --------------------------- Elimina studente --------------------------- */
-
-async function deleteStudent(studentId, name) {
-  if (!confirm(`Eliminare lo studente "${name}"?\n\nVerranno cancellati anche il suo questionario e le sue risposte. L'operazione non è reversibile.`))
-    return;
-
-  const { error } = await db.from("profiles").delete().eq("id", studentId);
-  if (error) { toast("Errore nell'eliminazione: " + error.message, true); return; }
-
-  toast("Studente eliminato: " + name);
-  loadTeacher();
-}
-
-/* --------------------- Upload + parsing .docx ---------------------------- */
-
-function triggerUpload(studentId) {
-  S.uploadTarget = studentId;
-  const input = $("docx-input");
-  input.value = "";
-  input.click();
-}
-
-async function handleDocxSelected(e) {
-  const file = e.target.files[0];
-  const studentId = S.uploadTarget;
-  if (!file || !studentId) return;
-
-  toast("Analisi del file in corso…");
-  let parsed;
-  try { parsed = await parseDocxFile(file); }
-  catch (err) { toast("Impossibile leggere il file .docx.", true); return; }
-
-  const { intro, questions } = parsed;
-  if (!questions.length) {
-    toast("Nessuna domanda riconosciuta. Controlla il formato del file.", true);
-    return;
-  }
-
-  const senzaRisposta = questions.filter((q) => !q.correct).length;
-  const title = file.name.replace(/\.docx$/i, "");
-  const existing = S.quizzesByStudent[studentId];
-  // la durata la gestisce il professore dalla tabella: qui la lasciamo invariata
-  const time_limit_minutes = existing ? (existing.time_limit_minutes || 0) : 0;
-
-  const { error } = await db.from("quizzes").upsert(
-    { student_id: studentId, title, intro, questions, time_limit_minutes, created_by: S.user.id },
-    { onConflict: "student_id" }
-  );
-  if (error) { toast("Errore nel salvataggio: " + error.message, true); return; }
-
-  let m = `Caricate ${questions.length} domande con le relative risposte corrette.`;
-  if (senzaRisposta > 0)
-    m = `Caricate ${questions.length} domande, ma ${senzaRisposta} senza risposta corretta riconosciuta. Controlla che ci sia una riga "Risposta: <lettera>".`;
-  toast(m, senzaRisposta > 0);
-  loadTeacher();
-}
-
-async function parseDocxFile(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const result = await window.mammoth.extractRawText({ arrayBuffer });
-  return parseQuizText(result.value);
-}
-
-/**
- * Trasforma il testo grezzo del .docx in { intro, questions }.
- *   (testo libero iniziale -> introduzione)
- *   1. Testo della domanda?
- *   a) opzione A   b) opzione B ...
- *   Risposta: b        (anche "Risposta corretta: B", "Soluzione: c", "Esatta: a")
- * La durata NON si legge dal file: la imposta il professore dalla tabella.
- */
-function parseQuizText(text) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-  const questions = [];
-  const introLines = [];
-  let current = null;
-
-  // Una riga di risposta inizia con una di queste parole...
-  const reAnswerStart = /^(?:risposta|risp\.?|soluzione|sol\.?|corretta|esatta|giusta|answer)\b/i;
-  const reQuestion = /^(\d+)\s*[\.\)\-]\s*(.+)$/;
-  const reOption = /^([a-dA-D])\s*[\)\.\-]\s*(.+)$/;
-
-  for (const line of lines) {
-    let m;
-    if (reAnswerStart.test(line)) {
-      // ...e da essa estraiamo la prima lettera isolata a–d (la risposta corretta)
-      const lm = line.match(/\b([a-dA-D])\b/);
-      if (current && lm) current.correct = lm[1].toLowerCase();
-    } else if ((m = line.match(reQuestion))) {
-      if (current) questions.push(current);
-      current = { number: parseInt(m[1], 10), text: m[2].trim(), options: [], correct: null };
-    } else if ((m = line.match(reOption))) {
-      if (current) current.options.push({ key: m[1].toLowerCase(), text: m[2].trim() });
-    } else if (current) {
-      if (current.options.length > 0) current.options[current.options.length - 1].text += " " + line;
-      else current.text += " " + line;
-    } else {
-      introLines.push(line); // testo prima della prima domanda = introduzione
-    }
-  }
-  if (current) questions.push(current);
-
-  return {
-    intro: introLines.join("\n"),
-    questions: questions.filter((q) => q.options.length >= 2),
-  };
-}
-
-/* ----------------------------- Anteprima -------------------------------- */
-
-function openPreview(studentId) {
-  const quiz = S.quizzesByStudent[studentId];
-  const student = S.students.find((s) => s.id === studentId);
-  if (!quiz) return;
-
-  $("preview-title").textContent = "Anteprima · " + (student?.full_name || student?.email || "");
-  const introHtml = quiz.intro
-    ? `<div class="preview-q"><div class="preview-q-text">Introduzione</div>
-         <div class="preview-opt">${escapeHtml(quiz.intro).replace(/\n/g, "<br/>")}</div></div>`
-    : "";
-  const tlHtml = (quiz.time_limit_minutes || 0) > 0
-    ? `<div class="preview-q"><div class="preview-q-text">Tempo massimo: ${quiz.time_limit_minutes} minuti</div></div>`
-    : "";
-  const qsHtml = quiz.questions.map((q) => {
-    const opts = (q.options || []).map((o) => {
-      const correct = o.key === q.correct ? " correct" : "";
-      return `<div class="preview-opt${correct}">${escapeHtml(o.key)}) ${escapeHtml(o.text)}</div>`;
-    }).join("");
-    return `<div class="preview-q"><div class="preview-q-text">${q.number}. ${escapeHtml(q.text)}</div>${opts}</div>`;
-  }).join("");
-
-  $("preview-body").innerHTML = introHtml + tlHtml + qsHtml;
-  $("preview-modal").hidden = false;
-}
-function closePreview() { $("preview-modal").hidden = true; }
-
-/* ------------------------- Export in Excel ------------------------------ */
-
-function computeScore(quiz, resp) {
-  let points = 0, correct = 0, wrong = 0, blank = 0;
-  for (const q of quiz.questions) {
-    const chosen = resp ? resp.answers[String(q.number)] : undefined;
-    if (!chosen) { blank++; points += POINTS.blank; }
-    else if (chosen === q.correct) { correct++; points += POINTS.correct; }
-    else { wrong++; points += POINTS.wrong; }
-  }
-  return { points, correct, wrong, blank, total: quiz.questions.length, max: quiz.questions.length * POINTS.correct };
-}
-
-function exportExcel() {
-  if (S.students.length === 0) { toast("Nessun dato da esportare.", true); return; }
-  const XLSX = window.XLSX;
-  const wb = XLSX.utils.book_new();
-
-  // --- Riepilogo ---
-  const summary = [["Nome", "Email", "Questionario", "Risposta", "Corrette", "Sbagliate", "Vuote", "Punteggio", "Max", "Data invio"]];
-  for (const s of S.students) {
-    const quiz = S.quizzesByStudent[s.id];
-    const resp = S.responsesByStudent[s.id];
-    let row = [s.full_name || "", s.email, quiz ? `Sì (${quiz.questions.length})` : "No", resp ? "Sì" : "No", "", "", "", "", "", ""];
-    if (quiz && resp) {
-      const sc = computeScore(quiz, resp);
-      row = [s.full_name || "", s.email, `Sì (${quiz.questions.length})`, "Sì",
-             sc.correct, sc.wrong, sc.blank, sc.points, sc.max,
-             new Date(resp.submitted_at).toLocaleString("it-IT")];
-    }
-    summary.push(row);
-  }
-  const wsSummary = XLSX.utils.aoa_to_sheet(summary);
-  wsSummary["!cols"] = [{ wch: 22 }, { wch: 26 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 6 }, { wch: 20 }];
-  XLSX.utils.book_append_sheet(wb, wsSummary, "Riepilogo");
-
-  // --- Un foglio per studente ---
-  const used = new Set(["Riepilogo"]);
-  for (const s of S.students) {
-    const quiz = S.quizzesByStudent[s.id];
-    if (!quiz) continue;
-    const resp = S.responsesByStudent[s.id];
-
-    const rows = [["N.", "Domanda", "Risposta studente", "Risposta corretta", "Esito", "Punti"]];
-    for (const q of quiz.questions) {
-      const chosen = resp ? (resp.answers[String(q.number)] || "") : "";
-      let esito = "—", punti = "";
-      if (resp) {
-        if (!chosen) { esito = "Non risposta"; punti = POINTS.blank; }
-        else if (chosen === q.correct) { esito = "Corretto"; punti = POINTS.correct; }
-        else { esito = "Errato"; punti = POINTS.wrong; }
-      }
-      rows.push([q.number, q.text, chosen || "(vuoto)", q.correct || "", esito, punti]);
-    }
-    if (resp) {
-      const sc = computeScore(quiz, resp);
-      rows.push([]);
-      rows.push(["", "TOTALE", "", "", `${sc.correct} giuste · ${sc.wrong} sbagliate · ${sc.blank} vuote`, sc.points]);
-    }
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [{ wch: 5 }, { wch: 56 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 7 }];
-    XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName(s.full_name || s.email, used));
-  }
-
-  XLSX.writeFile(wb, `quizportal_risultati_${new Date().toISOString().slice(0, 10)}.xlsx`);
-}
-
-function uniqueSheetName(raw, used) {
-  let name = String(raw || "Studente").replace(/[\\\/\?\*\[\]:]/g, " ").trim().slice(0, 28) || "Studente";
-  let candidate = name, i = 2;
-  while (used.has(candidate)) { candidate = name.slice(0, 25) + " " + i; i++; }
-  used.add(candidate);
-  return candidate;
-}
-
-/* ============================================================================
-   WIRING / AVVIO
-   ========================================================================== */
-
-function attachListeners() {
-  // auth
-  $("auth-form").addEventListener("submit", handleAuthSubmit);
-  $("auth-toggle-btn").addEventListener("click", () =>
-    setAuthMode(S.authMode === "login" ? "register" : "login"));
-  $("logout-btn").addEventListener("click", handleLogout);
-
-  // studente
-  $("intro-start").addEventListener("click", startQuiz);
-  $("q-prev").addEventListener("click", () => { if (S.idx > 0) goToQuestion(S.idx - 1); });
-  $("q-next").addEventListener("click", () => { if (S.idx < S.quiz.questions.length - 1) goToQuestion(S.idx + 1); });
-  $("q-clear").addEventListener("click", clearAnswer);
-  $("q-submit").addEventListener("click", () => submitQuiz(false));
-
-  // professore
-  $("add-student-form").addEventListener("submit", handleAddStudent);
-  $("refresh-btn").addEventListener("click", loadTeacher);
-  $("export-btn").addEventListener("click", exportExcel);
-  $("docx-input").addEventListener("change", handleDocxSelected);
-
-  $("students-body").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-act]");
-    if (!btn) return;
-    if (btn.dataset.act === "upload") triggerUpload(btn.dataset.id);
-    if (btn.dataset.act === "preview") openPreview(btn.dataset.id);
-    if (btn.dataset.act === "delete") deleteStudent(btn.dataset.id, btn.dataset.name);
-  });
-  $("students-body").addEventListener("change", (e) => {
-    const inp = e.target.closest('input[data-act="time"]');
-    if (inp) saveTimeLimit(inp.dataset.id, inp.value);
-  });
-
-  // modale
-  $("preview-close").addEventListener("click", closePreview);
-  $("preview-modal").addEventListener("click", (e) => { if (e.target.id === "preview-modal") closePreview(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePreview(); });
-}
-
-function checkConfig() {
-  if (
-    !CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes("YOUR-PROJECT") ||
-    !CONFIG.SUPABASE_KEY || CONFIG.SUPABASE_KEY.includes("YOUR-ANON")
-  ) {
-    $("auth-msg").className = "msg error";
-    $("auth-msg").textContent = "Configura js/config.js con i dati del tuo progetto Supabase.";
-    return false;
-  }
-  return true;
-}
-
-function init() {
-  attachListeners();
-  setAuthMode("login");
-  showView("auth");
-  if (!checkConfig()) return;
-
-  db.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") showView("auth");
-    else if (["SIGNED_IN", "INITIAL_SESSION", "TOKEN_REFRESHED"].includes(event)) route();
-  });
-}
-
-document.addEventListener("DOMContentLoaded", init);
+/* Pulsante elimina */
+.btn-danger { background: transparent; color: var(--red); border-color: #e6c4bf; }
+.btn-danger:hover { background: #fbe9e6; border-color: var(--red); }
