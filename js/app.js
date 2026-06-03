@@ -67,6 +67,7 @@ function showView(name) {
     $(v).hidden = v !== name + "-view";
   });
   $("topbar").hidden = name === "auth";
+  $("acme-badge").hidden = name !== "student";   // logo ACM-e solo nelle pagine del test
 }
 
 /* ============================================================================
@@ -212,10 +213,8 @@ function showIntro() {
   hideAllStudentPanels();
   $("intro-title").textContent = S.quiz.title || "Questionario";
   $("intro-text").textContent = S.quiz.intro || "";
-  const tl = S.quiz.time_limit_minutes || 0;
-  $("intro-time").textContent = tl > 0
-    ? `Tempo a disposizione: ${tl} minuti. Il conto alla rovescia parte appena inizi.`
-    : "Nessun limite di tempo.";
+  const tl = S.quiz.time_limit_minutes || 0;   // durata impostata dal professore
+  $("intro-time").textContent = tl > 0 ? `Durata: ${tl} minuti` : "Nessun limite di tempo";
   $("student-intro").hidden = false;
 }
 
@@ -444,6 +443,9 @@ function renderStudents() {
             <button class="btn btn-ghost btn-sm" data-act="preview" data-id="${s.id}" ${quiz ? "" : "disabled"}>
               Anteprima
             </button>
+            <button class="btn btn-danger btn-sm" data-act="delete" data-id="${s.id}" data-name="${escapeHtml(s.full_name || s.email)}">
+              Elimina
+            </button>
           </div>
         </td>
       </tr>`;
@@ -490,6 +492,19 @@ async function saveTimeLimit(studentId, minutes) {
   toast(val > 0 ? `Tempo impostato: ${val} min.` : "Nessun limite di tempo.");
 }
 
+/* --------------------------- Elimina studente --------------------------- */
+
+async function deleteStudent(studentId, name) {
+  if (!confirm(`Eliminare lo studente "${name}"?\n\nVerranno cancellati anche il suo questionario e le sue risposte. L'operazione non è reversibile.`))
+    return;
+
+  const { error } = await db.from("profiles").delete().eq("id", studentId);
+  if (error) { toast("Errore nell'eliminazione: " + error.message, true); return; }
+
+  toast("Studente eliminato: " + name);
+  loadTeacher();
+}
+
 /* --------------------- Upload + parsing .docx ---------------------------- */
 
 function triggerUpload(studentId) {
@@ -509,7 +524,7 @@ async function handleDocxSelected(e) {
   try { parsed = await parseDocxFile(file); }
   catch (err) { toast("Impossibile leggere il file .docx.", true); return; }
 
-  const { intro, questions, timeLimit } = parsed;
+  const { intro, questions } = parsed;
   if (!questions.length) {
     toast("Nessuna domanda riconosciuta. Controlla il formato del file.", true);
     return;
@@ -518,8 +533,8 @@ async function handleDocxSelected(e) {
   const senzaRisposta = questions.filter((q) => !q.correct).length;
   const title = file.name.replace(/\.docx$/i, "");
   const existing = S.quizzesByStudent[studentId];
-  // preserva il tempo già impostato; se nuovo, usa l'eventuale "Tempo:" del docx
-  const time_limit_minutes = existing ? (existing.time_limit_minutes || 0) : (timeLimit || 0);
+  // la durata la gestisce il professore dalla tabella: qui la lasciamo invariata
+  const time_limit_minutes = existing ? (existing.time_limit_minutes || 0) : 0;
 
   const { error } = await db.from("quizzes").upsert(
     { student_id: studentId, title, intro, questions, time_limit_minutes, created_by: S.user.id },
@@ -527,9 +542,10 @@ async function handleDocxSelected(e) {
   );
   if (error) { toast("Errore nel salvataggio: " + error.message, true); return; }
 
-  let m = `Caricate ${questions.length} domande.`;
-  if (senzaRisposta > 0) m += ` Attenzione: ${senzaRisposta} senza "Risposta:".`;
-  toast(m);
+  let m = `Caricate ${questions.length} domande con le relative risposte corrette.`;
+  if (senzaRisposta > 0)
+    m = `Caricate ${questions.length} domande, ma ${senzaRisposta} senza risposta corretta riconosciuta. Controlla che ci sia una riga "Risposta: <lettera>".`;
+  toast(m, senzaRisposta > 0);
   loadTeacher();
 }
 
@@ -540,31 +556,30 @@ async function parseDocxFile(file) {
 }
 
 /**
- * Trasforma il testo grezzo del .docx in { intro, questions, timeLimit }.
+ * Trasforma il testo grezzo del .docx in { intro, questions }.
  *   (testo libero iniziale -> introduzione)
- *   Tempo: 30                       (opzionale)
  *   1. Testo della domanda?
  *   a) opzione A   b) opzione B ...
- *   Risposta: b
+ *   Risposta: b        (anche "Risposta corretta: B", "Soluzione: c", "Esatta: a")
+ * La durata NON si legge dal file: la imposta il professore dalla tabella.
  */
 function parseQuizText(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const questions = [];
   const introLines = [];
   let current = null;
-  let timeLimit = 0;
 
-  const reAnswer = /^(?:risposta|soluzione)\s*(?:corretta)?\s*[:.\-]?\s*([a-dA-D])\b/i;
+  // Una riga di risposta inizia con una di queste parole...
+  const reAnswerStart = /^(?:risposta|risp\.?|soluzione|sol\.?|corretta|esatta|giusta|answer)\b/i;
   const reQuestion = /^(\d+)\s*[\.\)\-]\s*(.+)$/;
   const reOption = /^([a-dA-D])\s*[\)\.\-]\s*(.+)$/;
-  const reTime = /^(?:tempo|durata)\s*(?:massimo)?\s*[:.\-]?\s*(\d+)\s*(?:min|minuti)?\b/i;
 
   for (const line of lines) {
     let m;
-    if (!current && (m = line.match(reTime))) {
-      timeLimit = parseInt(m[1], 10);
-    } else if ((m = line.match(reAnswer))) {
-      if (current) current.correct = m[1].toLowerCase();
+    if (reAnswerStart.test(line)) {
+      // ...e da essa estraiamo la prima lettera isolata a–d (la risposta corretta)
+      const lm = line.match(/\b([a-dA-D])\b/);
+      if (current && lm) current.correct = lm[1].toLowerCase();
     } else if ((m = line.match(reQuestion))) {
       if (current) questions.push(current);
       current = { number: parseInt(m[1], 10), text: m[2].trim(), options: [], correct: null };
@@ -581,7 +596,6 @@ function parseQuizText(text) {
 
   return {
     intro: introLines.join("\n"),
-    timeLimit,
     questions: questions.filter((q) => q.options.length >= 2),
   };
 }
@@ -718,6 +732,7 @@ function attachListeners() {
     if (!btn) return;
     if (btn.dataset.act === "upload") triggerUpload(btn.dataset.id);
     if (btn.dataset.act === "preview") openPreview(btn.dataset.id);
+    if (btn.dataset.act === "delete") deleteStudent(btn.dataset.id, btn.dataset.name);
   });
   $("students-body").addEventListener("change", (e) => {
     const inp = e.target.closest('input[data-act="time"]');
