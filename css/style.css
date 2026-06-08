@@ -325,15 +325,17 @@ input::placeholder { color: #9aa7b5; }
 .nav-cell:hover { border-color: var(--ink-soft); }
 .nav-cell .num { font-size: 13px; font-weight: 700; line-height: 1; }
 .nav-cell .ans { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; line-height: 1; }
-.nav-cell.answered { background: #e4eef9; border-color: var(--ochre); }
+.nav-cell.answered { background: #e4eef9; border-color: #9cc0e6; }
 .nav-cell.answered .ans { color: var(--ochre-dk); }
+.nav-cell.empty { background: #fdf1dc; border-color: #e0a23c; }
+.nav-cell.empty .ans { color: #b9791a; font-weight: 700; }
 .nav-cell.current { box-shadow: 0 0 0 2px var(--ink); border-color: var(--ink); }
 
 .aside-legend { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; font-size: 12.5px; color: var(--muted); }
 .aside-legend span { display: flex; align-items: center; gap: 7px; }
 .dot { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
-.dot-done { background: #e4eef9; border: 1.5px solid var(--ochre); }
-.dot-empty { background: var(--paper); border: 1.5px solid var(--line-2); }
+.dot-done { background: #e4eef9; border: 1.5px solid #9cc0e6; }
+.dot-empty { background: #fdf1dc; border: 1.5px solid #e0a23c; }
 
 /* --- Campo tempo nella tabella professore --- */
 .time-input {
