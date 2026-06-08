@@ -19,6 +19,7 @@ const S = {
   quiz: null,
   idx: 0,
   answers: {},
+  startedAt: null,       // timestamp ms di inizio sessione
   deadline: null,        // timestamp ms in cui scade il tempo (null = nessun limite)
   timerInterval: null,
   // professore
@@ -202,6 +203,7 @@ async function loadStudent() {
     S.answers = saved.answers || {};
     S.idx = Math.min(saved.idx || 0, quiz.questions.length - 1);
     S.deadline = saved.deadline || null;
+    S.startedAt = saved.startedAt || Date.now();
     if (S.deadline && Date.now() >= S.deadline) { enterQuiz(); submitQuiz(true); return; }
     enterQuiz();
     return;
@@ -220,6 +222,7 @@ function showIntro() {
 }
 
 function startQuiz() {
+  S.startedAt = Date.now();
   const tl = S.quiz.time_limit_minutes || 0;
   S.deadline = tl > 0 ? Date.now() + tl * 60 * 1000 : null;
   enterQuiz();
@@ -272,7 +275,7 @@ function renderNavigator() {
     const given = S.answers[q.number];
     const cell = document.createElement("button");
     cell.type = "button";
-    cell.className = "nav-cell" + (given ? " answered" : "") + (i === S.idx ? " current" : "");
+    cell.className = "nav-cell" + (given ? " answered" : " empty") + (i === S.idx ? " current" : "");
     cell.innerHTML = `<span class="num">${q.number}</span><span class="ans">${given ? escapeHtml(given) : "—"}</span>`;
     cell.addEventListener("click", () => goToQuestion(i));
     grid.appendChild(cell);
@@ -337,6 +340,7 @@ async function submitQuiz(auto = false) {
     quiz_id: S.quiz.id,
     student_id: S.user.id,
     answers: S.answers,
+    started_at: S.startedAt ? new Date(S.startedAt).toISOString() : null,
   });
   setLoading("q-submit", false, "Termina e invia");
 
@@ -364,7 +368,7 @@ function stateKey(qid) { return "qp_state_" + qid; }
 function persistQuizState() {
   try {
     sessionStorage.setItem(stateKey(S.quiz.id), JSON.stringify({
-      answers: S.answers, idx: S.idx, deadline: S.deadline,
+      answers: S.answers, idx: S.idx, deadline: S.deadline, startedAt: S.startedAt,
     }));
   } catch (_) {}
 }
@@ -653,26 +657,65 @@ function exportExcel() {
   const XLSX = window.XLSX;
   const wb = XLSX.utils.book_new();
 
+  const fmt = (d) => (d ? new Date(d).toLocaleString("it-IT") : "");
+
   // --- Riepilogo ---
-  const summary = [["Nome", "Email", "Questionario", "Risposta", "Corrette", "Sbagliate", "Vuote", "Punteggio", "Max", "Data invio"]];
+  const summary = [["Nome", "Email", "Questionario", "Risposta", "Corrette", "Sbagliate", "Vuote",
+                    "Punteggio", "Max", "%", "Inizio sessione", "Fine sessione"]];
   for (const s of S.students) {
     const quiz = S.quizzesByStudent[s.id];
     const resp = S.responsesByStudent[s.id];
-    let row = [s.full_name || "", s.email, quiz ? `Sì (${quiz.questions.length})` : "No", resp ? "Sì" : "No", "", "", "", "", "", ""];
+    let row = [s.full_name || "", s.email, quiz ? `Sì (${quiz.questions.length})` : "No",
+               resp ? "Sì" : "No", "", "", "", "", "", "", "", ""];
     if (quiz && resp) {
       const sc = computeScore(quiz, resp);
+      let pct = sc.max ? Math.round((sc.points / sc.max) * 100) : 0;
+      if (pct < 0) pct = 0;                       // percentuale negativa -> 0%
       row = [s.full_name || "", s.email, `Sì (${quiz.questions.length})`, "Sì",
-             sc.correct, sc.wrong, sc.blank, sc.points, sc.max,
-             new Date(resp.submitted_at).toLocaleString("it-IT")];
+             sc.correct, sc.wrong, sc.blank, sc.points, sc.max, pct + "%",
+             fmt(resp.started_at), fmt(resp.submitted_at)];
     }
     summary.push(row);
   }
   const wsSummary = XLSX.utils.aoa_to_sheet(summary);
-  wsSummary["!cols"] = [{ wch: 22 }, { wch: 26 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 10 }, { wch: 6 }, { wch: 20 }];
+  wsSummary["!cols"] = [{ wch: 22 }, { wch: 26 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 9 },
+                        { wch: 7 }, { wch: 10 }, { wch: 6 }, { wch: 7 }, { wch: 20 }, { wch: 20 }];
   XLSX.utils.book_append_sheet(wb, wsSummary, "Riepilogo");
 
+  // --- Statistiche per domanda (aggregate per codice [SC-xx]) ---
+  const stats = {};
+  for (const s of S.students) {
+    const quiz = S.quizzesByStudent[s.id];
+    const resp = S.responsesByStudent[s.id];
+    if (!quiz || !resp) continue;                 // solo chi ha consegnato
+    for (const q of quiz.questions) {
+      const code = questionCode(q.text);
+      if (!stats[code]) stats[code] = { code, text: questionLabel(q.text), pres: 0, ok: 0, ko: 0, na: 0 };
+      const e = stats[code];
+      e.pres++;
+      const chosen = resp.answers[String(q.number)];
+      if (!chosen) e.na++;
+      else if (chosen === q.correct) e.ok++;
+      else e.ko++;
+    }
+  }
+  const statRows = Object.values(stats).sort((a, b) => a.code.localeCompare(b.code, "it", { numeric: true }));
+  if (statRows.length > 0) {
+    const pct = (n, t) => (t ? Math.round((n / t) * 100) + "%" : "0%");
+    const rows = [["Codice", "Domanda", "Presenze", "Corrette", "Sbagliate", "Mancate",
+                   "% Corrette", "% Sbagliate", "% Mancate"]];
+    for (const e of statRows) {
+      rows.push([e.code, e.text, e.pres, e.ok, e.ko, e.na,
+                 pct(e.ok, e.pres), pct(e.ko, e.pres), pct(e.na, e.pres)]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 10 }, { wch: 50 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 9 },
+                   { wch: 11 }, { wch: 12 }, { wch: 11 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Statistiche domande");
+  }
+
   // --- Un foglio per studente ---
-  const used = new Set(["Riepilogo"]);
+  const used = new Set(["Riepilogo", "Statistiche domande"]);
   for (const s of S.students) {
     const quiz = S.quizzesByStudent[s.id];
     if (!quiz) continue;
@@ -700,6 +743,16 @@ function exportExcel() {
   }
 
   XLSX.writeFile(wb, `quizportal_risultati_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// Codice della domanda: il testo tra parentesi quadre [SC-05]; altrimenti i primi caratteri.
+function questionCode(text) {
+  const m = String(text).match(/\[([^\]]+)\]/);
+  return m ? m[1].trim() : String(text).slice(0, 40).trim();
+}
+// Testo della domanda senza il codice iniziale, per leggibilità.
+function questionLabel(text) {
+  return String(text).replace(/^\s*\[[^\]]+\]\s*/, "").trim();
 }
 
 function uniqueSheetName(raw, used) {
