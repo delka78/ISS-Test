@@ -153,7 +153,7 @@ async function route() {
   if (!profile) { await sleep(700); profile = await fetchProfile(user.id); }
   S.profile = profile;
 
-  const roleLabel = profile?.role === "teacher" ? "Professore" : "Studente";
+  const roleLabel = profile?.role === "teacher" ? "Professore" : "User";
   $("who").textContent = `${profile?.full_name || profile?.email || ""} · ${roleLabel}`;
 
   if (profile?.role === "teacher") { showView("teacher"); loadTeacher(); }
@@ -557,29 +557,77 @@ async function handleDocxSelected(e) {
 
 async function parseDocxFile(file) {
   const arrayBuffer = await file.arrayBuffer();
+  // Leggiamo direttamente word/document.xml così cogliamo anche l'EVIDENZIATORE
+  // VERDE (che la sola estrazione di testo perderebbe).
+  try {
+    if (window.JSZip) {
+      const zip = await window.JSZip.loadAsync(arrayBuffer);
+      const entry = zip.file("word/document.xml");
+      if (entry) {
+        const xml = await entry.async("string");
+        const parsed = parseQuizParagraphs(extractDocxParagraphs(xml));
+        if (parsed.questions.length) return parsed;
+      }
+    }
+  } catch (e) {
+    /* se qualcosa va storto, si ripiega sul solo testo qui sotto */
+  }
+  // Ripiego: solo testo via mammoth (formati con ✓ o riga "Risposta:")
   const result = await window.mammoth.extractRawText({ arrayBuffer });
   return parseQuizText(result.value);
 }
 
-/**
- * Trasforma il testo grezzo del .docx in { intro, questions }.
- * Riconosce la risposta corretta in DUE modi:
- *   1) un segno di spunta ✓ davanti all'opzione giusta:   ✓ C) testo
- *   2) una riga dedicata:   Risposta: c   (anche "Risposta corretta: C", "Soluzione: c")
- * Domande numerate (1.), opzioni a)/A) ... La durata la imposta il professore.
- */
+function decodeXmlEntities(s) {
+  return String(s)
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&amp;/g, "&");
+}
+
+// Estrae i paragrafi del .docx come { text, green }.
+// green = true se nel paragrafo c'è un run evidenziato in verde.
+function extractDocxParagraphs(xml) {
+  const paras = [];
+  const pRe = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
+  let pm;
+  while ((pm = pRe.exec(xml)) !== null) {
+    const body = pm[1];
+    let text = "";
+    const tRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g;
+    let tm;
+    while ((tm = tRe.exec(body)) !== null) text += decodeXmlEntities(tm[1]);
+    const green = /<w:highlight\s+w:val="[^"]*[Gg]reen[^"]*"\s*\/?>/.test(body);
+    paras.push({ text: text.trim(), green });
+  }
+  return paras;
+}
+
+// Versione testuale (ripiego mammoth): nessuna info di evidenziatore.
 function parseQuizText(text) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  const paras = text.split(/\r?\n/).map((l) => ({ text: l.trim(), green: false }));
+  return parseQuizParagraphs(paras);
+}
+
+/**
+ * Nucleo del parsing. Riconosce la risposta corretta in TRE modi:
+ *   1) opzione EVIDENZIATA IN VERDE          (paragrafo con green = true)
+ *   2) un segno di spunta ✓ davanti:  ✓ C) testo
+ *   3) una riga dedicata:  Risposta: c   (anche "Risposta corretta: C", "Soluzione: c")
+ * Domande numerate (1.), opzioni a)/A). La durata la imposta il professore.
+ */
+function parseQuizParagraphs(paras) {
   const questions = [];
   const introLines = [];
   let current = null;
 
   const reAnswerStart = /^(?:risposta|risp\.?|soluzione|sol\.?|corretta|esatta|giusta|answer)\b/i;
   const reQuestion = /^(\d+)\s*[\.\)\-]\s*(.+)$/;
-  // marcatore di correttezza opzionale (✓ ✔ ✅ √ ☑) + lettera A–D + ) . o -
   const reOption = /^([\u2713\u2714\u2705\u221A\u2611])?\s*([A-Da-d])\s*[\)\.\-]\s*(.+)$/;
 
-  for (const line of lines) {
+  for (const para of paras) {
+    const line = para.text;
+    if (!line) continue;
     const mq = reQuestion.exec(line);
     const mo = reOption.exec(line);
 
@@ -591,16 +639,16 @@ function parseQuizText(text) {
       const key = mo[2].toLowerCase();
       if (current) {
         current.options.push({ key, text: mo[3].trim() });
-        if (marker) current.correct = key;        // ✓ = questa è la risposta giusta
+        if (marker || para.green) current.correct = key;   // ✓ oppure evidenziatore verde
       }
     } else if (current && reAnswerStart.test(line)) {
-      const lm = line.match(/\b([a-dA-D])\b/);     // riga "Risposta: x"
+      const lm = line.match(/\b([a-dA-D])\b/);
       if (lm) current.correct = lm[1].toLowerCase();
     } else if (current) {
       if (current.options.length > 0) current.options[current.options.length - 1].text += " " + line;
       else current.text += " " + line;
     } else {
-      introLines.push(line); // testo prima della prima domanda = introduzione
+      introLines.push(line);
     }
   }
   if (current) questions.push(current);
@@ -652,12 +700,48 @@ function computeScore(quiz, resp) {
   return { points, correct, wrong, blank, total: quiz.questions.length, max: quiz.questions.length * POINTS.correct };
 }
 
+// Mappatura banca (prefisso del codice domanda) -> ruolo, nell'ordine dei fogli ISS.
+const ROLE_BANKS = [
+  { code: "TL",  role: "Site TS Lead" },
+  { code: "ST",  role: "Sup. Tecnico" },
+  { code: "SP",  role: "Sup. Presidio" },
+  { code: "HD1", role: "Help Desk L1" },
+  { code: "HD2", role: "Help Desk L2" },
+  { code: "IQ",  role: "Ispettore Q/HSE" },
+  { code: "SC",  role: "Scheduler" },
+  { code: "EAM", role: "EAM Manager" },
+  { code: "IM",  role: "Ing. Manutenzione" },
+  { code: "NP",  role: "Prev./Nuovi Proj." },
+];
+
+// Banca di una domanda = prefisso del codice prima del trattino ([SC-05] -> SC).
+function bancaOf(text) {
+  const c = questionCode(text);
+  const i = c.indexOf("-");
+  return (i > 0 ? c.slice(0, i) : c).toUpperCase();
+}
+
+// Per uno studente, % per ruolo = corrette nella banca / domande della banca (nel suo test).
+// Restituisce un array di 10 valori (frazione 0..1) o null se la banca non è nel test.
+function roleValues(quiz, resp) {
+  const tot = {}, ok = {};
+  for (const q of quiz.questions) {
+    const b = bancaOf(q.text);
+    tot[b] = (tot[b] || 0) + 1;
+    const chosen = resp ? resp.answers[String(q.number)] : undefined;
+    if (chosen && chosen === q.correct) ok[b] = (ok[b] || 0) + 1;
+  }
+  return ROLE_BANKS.map((rb) => (tot[rb.code] > 0 ? (ok[rb.code] || 0) / tot[rb.code] : null));
+}
+
 function exportExcel() {
   if (S.students.length === 0) { toast("Nessun dato da esportare.", true); return; }
   const XLSX = window.XLSX;
   const wb = XLSX.utils.book_new();
 
   const fmt = (d) => (d ? new Date(d).toLocaleString("it-IT") : "");
+
+  addIssSheets(wb, XLSX);   // fogli "Risultati" e "Radar" in stile ISS
 
   // --- Riepilogo ---
   const summary = [["Nome", "Email", "Questionario", "Risposta", "Corrette", "Sbagliate", "Vuote",
@@ -715,7 +799,7 @@ function exportExcel() {
   }
 
   // --- Un foglio per studente ---
-  const used = new Set(["Riepilogo", "Statistiche domande"]);
+  const used = new Set(["Riepilogo", "Statistiche domande", "Risultati", "Radar"]);
   for (const s of S.students) {
     const quiz = S.quizzesByStudent[s.id];
     if (!quiz) continue;
@@ -753,6 +837,69 @@ function questionCode(text) {
 // Testo della domanda senza il codice iniziale, per leggibilità.
 function questionLabel(text) {
   return String(text).replace(/^\s*\[[^\]]+\]\s*/, "").trim();
+}
+
+// Costruisce i fogli "Risultati" e "Radar" in stile correzione ISS.
+function addIssSheets(wb, XLSX) {
+  const withQuiz = S.students.filter((s) => S.quizzesByStudent[s.id]);
+  if (withQuiz.length === 0) return;
+
+  const nRoles = ROLE_BANKS.length;
+  // valori per ruolo di ogni candidato + accumulo per la media
+  const perStudent = withQuiz.map((s) => {
+    const quiz = S.quizzesByStudent[s.id];
+    const resp = S.responsesByStudent[s.id];
+    const sc = computeScore(quiz, resp || { answers: {} });
+    return { name: s.full_name || s.email, sc, roles: roleValues(quiz, resp) };
+  });
+  const roleAvg = ROLE_BANKS.map((_, i) => {
+    const vals = perStudent.map((p) => p.roles[i]).filter((v) => v !== null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  });
+
+  // ---------- Foglio "Risultati" ----------
+  const roleNames = ROLE_BANKS.map((r) => r.role);
+  const ris = [];
+  ris.push(["Correzione Assessment TO-BE — ISS Technical Services"]);
+  ris.push(["+3 punti risposta esatta", " 0 nessuna risposta", " -1 risposta errata"]);
+  ris.push([]);
+  ris.push(["Candidato", "N. Dom.", "Pt. Max", "Corrette", "Errate", "N. Risp.",
+            "Pt. Totale", "% su Max", ...roleNames]);
+  for (const p of perStudent) {
+    const pctMax = p.sc.max ? p.sc.points / p.sc.max : 0;
+    ris.push([p.name, p.sc.total, p.sc.max, p.sc.correct, p.sc.wrong, p.sc.blank,
+              p.sc.points, pctMax, ...p.roles]);
+  }
+  ris.push(["Media % per banca (tra chi ha svolto quel ruolo)", "", "", "", "", "", "", "", ...roleAvg]);
+
+  const wsR = XLSX.utils.aoa_to_sheet(ris);
+  wsR["!cols"] = [{ wch: 34 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 7 }, { wch: 8 },
+                  { wch: 9 }, { wch: 9 }, ...roleNames.map(() => ({ wch: 13 }))];
+  applyPercentFormats(wsR, XLSX, 7, 8, 8 + nRoles - 1);   // H = % su Max ; I..R = ruoli
+  XLSX.utils.book_append_sheet(wb, wsR, "Risultati");
+
+  // ---------- Foglio "Radar" (tabella dati; il grafico si inserisce in Excel) ----------
+  const rad = [["Candidato", ...roleNames]];
+  for (const p of perStudent) rad.push([p.name, ...p.roles]);
+  rad.push(["Media per banca", ...roleAvg]);
+
+  const wsRad = XLSX.utils.aoa_to_sheet(rad);
+  wsRad["!cols"] = [{ wch: 34 }, ...roleNames.map(() => ({ wch: 13 }))];
+  applyPercentFormats(wsRad, XLSX, -1, 1, nRoles);        // B..K = ruoli
+  XLSX.utils.book_append_sheet(wb, wsRad, "Radar");
+}
+
+// Imposta il formato percentuale: colonna pctCol -> 0.0% ; colonne da..a (incluse) -> 0%.
+function applyPercentFormats(ws, XLSX, pctCol, roleFrom, roleTo) {
+  const ref = XLSX.utils.decode_range(ws["!ref"]);
+  for (let R = ref.s.r; R <= ref.e.r; R++) {
+    for (let C = ref.s.c; C <= ref.e.c; C++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+      if (!cell || cell.t !== "n") continue;
+      if (C === pctCol) cell.z = "0.0%";
+      else if (C >= roleFrom && C <= roleTo) cell.z = "0%";
+    }
+  }
 }
 
 function uniqueSheetName(raw, used) {
